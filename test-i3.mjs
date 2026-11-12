@@ -11,7 +11,8 @@ try{
  const {sendI3Chord,I3_ACTIONS,setupI3}=await import(pathToFileURL(bundle));
  const sent=[];sendI3Chord(m=>sent.push(m),[65513,65505,50]);
  assert.deepEqual(sent,['r','k,65513,1','k,65505,1','k,50,1','k,50,0','k,65505,0','k,65513,0','r']);
- assert.deepEqual(I3_ACTIONS.terminal,[65513,65293]);
+ assert.deepEqual(I3_ACTIONS.terminal,[65513,65505,116]);
+ assert.deepEqual(I3_ACTIONS.browser,[65513,65505,98]);
  assert.deepEqual(I3_ACTIONS.files,[65513,65505,101]);
  assert.deepEqual(I3_ACTIONS.tabbed,[65513,119]);
  function element(dataset={}){const e=new EventTarget(),classes=new Set();e.dataset=dataset;e.attrs={};e.classList={toggle(c,on){if(on)classes.add(c);else classes.delete(c);},contains:c=>classes.has(c)};e.setAttribute=(k,v)=>e.attrs[k]=v;e.click=()=>e.dispatchEvent(new Event('click'));return e;}

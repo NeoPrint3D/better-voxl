@@ -72,7 +72,7 @@ fn motion_cost() {
         times.sort_by(f64::total_cmp);
         println!(
             "MOTION {} {threads}t {label}: avg {:.2}ms p95 {:.2}ms, {:.2} Mbps at 60fps",
-            std::env::var("VOXL_MOTION_SEARCH").unwrap_or_else(|_| "umh".into()),
+            std::env::var("VOXL_MOTION_SEARCH").unwrap_or_else(|_| "hex".into()),
             times.iter().sum::<f64>() / times.len() as f64,
             times[times.len() * 95 / 100],
             bytes as f64 / times.len() as f64 * 60.0 * 8.0 / 1e6

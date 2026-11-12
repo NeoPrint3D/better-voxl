@@ -36,6 +36,12 @@ pub enum InputEvent {
     },
     /// Remote clipboard update, ordered with the key events around it.
     Clipboard(crate::desktop::ClipContent),
+    /// Smart paste: detects whether the focused X11 window is a terminal or GUI app.
+    Paste,
+    /// Smart copy: Ctrl+Shift+C in terminals, Ctrl+C in GUI apps.
+    Copy,
+    /// Smart cut: Ctrl+X in GUI apps (no-op in terminals).
+    Cut,
     ReleaseAll,
     /// Undo keymap changes before exit.
     Shutdown,
@@ -314,6 +320,134 @@ impl Injector {
             .xtest_fake_input(ty, detail, x11rb::CURRENT_TIME, self.root, x, y, 0);
     }
 
+    fn wm_class_of(&self, mut win: u32) -> String {
+        for _ in 0..8 {
+            if win == 0 || win == self.root {
+                break;
+            }
+            if let Ok(Ok(prop)) = self
+                .conn
+                .get_property(
+                    false,
+                    win,
+                    xproto::AtomEnum::WM_CLASS,
+                    xproto::AtomEnum::STRING,
+                    0,
+                    256,
+                )
+                .map(|c| c.reply())
+            {
+                if !prop.value.is_empty() {
+                    return String::from_utf8_lossy(&prop.value).to_ascii_lowercase();
+                }
+            }
+            match self.conn.query_tree(win).ok().and_then(|c| c.reply().ok()) {
+                Some(tree) => win = tree.parent,
+                None => break,
+            }
+        }
+        String::new()
+    }
+
+    fn focused_wm_class(&self) -> String {
+        if let Ok(Ok(atom)) = self
+            .conn
+            .intern_atom(false, b"_NET_ACTIVE_WINDOW")
+            .map(|c| c.reply())
+        {
+            if let Ok(Ok(prop)) = self
+                .conn
+                .get_property(
+                    false,
+                    self.root,
+                    atom.atom,
+                    xproto::AtomEnum::WINDOW,
+                    0,
+                    1,
+                )
+                .map(|c| c.reply())
+            {
+                if let Some(active) = prop.value32().and_then(|mut v| v.next()) {
+                    let cls = self.wm_class_of(active);
+                    if !cls.is_empty() {
+                        return cls;
+                    }
+                }
+            }
+        }
+        if let Ok(Ok(focus)) = self.conn.get_input_focus().map(|c| c.reply()) {
+            return self.wm_class_of(focus.focus);
+        }
+        String::new()
+    }
+
+    fn is_terminal_focused(&self) -> bool {
+        const TERMINALS: &[&str] = &[
+            "qterminal",
+            "xterm",
+            "uxterm",
+            "dropdownterminal",
+            "i3-dropdown",
+            "xfce4-terminal",
+            "alacritty",
+            "kitty",
+            "gnome-terminal",
+            "konsole",
+            "wezterm",
+            "terminator",
+            "tilix",
+            "urxvt",
+            "rxvt",
+            "st",
+            "sakura",
+            "lxterminal",
+            "mate-terminal",
+            "foot",
+            "guake",
+            "yakuake",
+            "tilda",
+            "hyper",
+            "tabby",
+            "warp",
+        ];
+        let cls = self.focused_wm_class();
+        cls.split('\0')
+            .filter(|s| !s.is_empty())
+            .any(|part| TERMINALS.iter().any(|t| part == *t || part.contains(t)))
+    }
+
+    fn inject_chord(&mut self, mods: &[u32], key: u32) {
+        let held_mods: Vec<(u32, u8)> = self
+            .pressed
+            .iter()
+            .filter(|&(&sym, _)| (0xffe1..=0xffee).contains(&sym))
+            .map(|(&sym, &kc)| (sym, kc))
+            .collect();
+        for &(_, kc) in &held_mods {
+            self.fake(xproto::KEY_RELEASE_EVENT, kc, 0, 0);
+        }
+        let mut mod_kcs = Vec::with_capacity(mods.len());
+        for &m in mods {
+            let (kc, _) = self.resolve(m);
+            if kc != 0 {
+                self.fake(xproto::KEY_PRESS_EVENT, kc, 0, 0);
+                mod_kcs.push(kc);
+            }
+        }
+        let (key_kc, _) = self.resolve(key);
+        if key_kc != 0 {
+            self.fake(xproto::KEY_PRESS_EVENT, key_kc, 0, 0);
+            self.fake(xproto::KEY_RELEASE_EVENT, key_kc, 0, 0);
+        }
+        for &kc in mod_kcs.iter().rev() {
+            self.fake(xproto::KEY_RELEASE_EVENT, kc, 0, 0);
+        }
+        for &(_, kc) in &held_mods {
+            self.fake(xproto::KEY_PRESS_EVENT, kc, 0, 0);
+        }
+        let _ = self.conn.flush();
+    }
+
     fn resolve(&mut self, keysym: u32) -> (u8, ShiftFix) {
         let want_level = if self.shift_down > 0 { 1 } else { 0 };
         if let Some(&(kc, lvl)) = self.lookup.get(&keysym) {
@@ -468,6 +602,18 @@ impl Injector {
             }
             InputEvent::Key { keysym, down } => {
                 if down {
+                    // Smart paste detection on raw Ctrl+V / Ctrl+Shift+V chords:
+                    // if Control is held (without Alt/Super) and V is pressed, route through
+                    // smart Paste so terminals get Ctrl+Shift+V and GUI apps get Ctrl+V.
+                    let ctrl_held = self.pressed.contains_key(&0xffe3)
+                        || self.pressed.contains_key(&0xffe4);
+                    let alt_or_super = self.pressed.keys().any(|sym| {
+                        matches!(*sym, 0xffe7 | 0xffe8 | 0xffe9 | 0xffea | 0xffeb | 0xffec)
+                    });
+                    if ctrl_held && !alt_or_super && matches!(keysym, 0x76 | 0x56) {
+                        self.handle(InputEvent::Paste);
+                        return;
+                    }
                     if self.pressed.contains_key(&keysym) {
                         // Autorepeat: re-press without release is fine for X.
                         let kc = self.pressed[&keysym];
@@ -513,6 +659,25 @@ impl Injector {
             InputEvent::Clipboard(text) => {
                 if let Some(c) = &self.clipboard {
                     c.set_blocking(text);
+                }
+            }
+            InputEvent::Paste => {
+                if self.is_terminal_focused() {
+                    self.inject_chord(&[0xffe3, SHIFT_L], 0x76);
+                } else {
+                    self.inject_chord(&[0xffe3], 0x76);
+                }
+            }
+            InputEvent::Copy => {
+                if self.is_terminal_focused() {
+                    self.inject_chord(&[0xffe3, SHIFT_L], 0x63);
+                } else {
+                    self.inject_chord(&[0xffe3], 0x63);
+                }
+            }
+            InputEvent::Cut => {
+                if !self.is_terminal_focused() {
+                    self.inject_chord(&[0xffe3], 0x78);
                 }
             }
             InputEvent::Shutdown => {

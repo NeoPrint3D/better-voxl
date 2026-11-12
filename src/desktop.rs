@@ -35,8 +35,21 @@ pub struct ClipboardHandle {
     wake_w: Arc<OwnedFd>,
 }
 
+/// Strip terminal bracketed-paste escape sequences (`\x1b[200~`, `\x1b[201~`, `^[[200~`, `^[[201~`)
+/// so they never pollute terminal or GUI pastes.
+pub fn sanitize_clipboard_text(s: &str) -> String {
+    s.replace("\x1b[200~", "")
+        .replace("\x1b[201~", "")
+        .replace("^[[200~", "")
+        .replace("^[[201~", "")
+}
+
 impl ClipboardHandle {
     pub fn set_blocking(&self, content: ClipContent) {
+        let content = match content {
+            ClipContent::Text(t) => ClipContent::Text(sanitize_clipboard_text(&t)),
+            other => other,
+        };
         let (done_tx, done_rx) = mpsc::sync_channel(1);
         if self.tx.send((content, done_tx)).is_ok() {
             let _ = write(&*self.wake_w, &[1u8]);
@@ -118,6 +131,12 @@ pub fn spawn(
             xfixes::SelectionEventMask::SET_SELECTION_OWNER,
         )
         .map_err(|e| e.to_string())?;
+        conn.xfixes_select_selection_input(
+            root,
+            u32::from(AtomEnum::PRIMARY),
+            xfixes::SelectionEventMask::SET_SELECTION_OWNER,
+        )
+        .map_err(|e| e.to_string())?;
     }
     conn.flush().map_err(|e| e.to_string())?;
     let (tx, rx) = mpsc::channel::<(ClipContent, mpsc::SyncSender<()>)>();
@@ -143,6 +162,11 @@ pub fn spawn(
                         }
                         owned = Some(content);
                         let _ = conn.set_selection_owner(win, atoms.clipboard, x11rb::CURRENT_TIME);
+                        let _ = conn.set_selection_owner(
+                            win,
+                            u32::from(AtomEnum::PRIMARY),
+                            x11rb::CURRENT_TIME,
+                        );
                         // Round trip: ownership is in effect once this returns.
                         let _ = conn.get_selection_owner(atoms.clipboard).map(|c| c.reply());
                     }
@@ -170,7 +194,7 @@ pub fn spawn(
                             // Ask what the new owner offers, then fetch text or an image.
                             let _ = conn.convert_selection(
                                 win,
-                                atoms.clipboard,
+                                e.selection,
                                 atoms.targets,
                                 atoms.prop,
                                 x11rb::CURRENT_TIME,
@@ -202,7 +226,7 @@ pub fn spawn(
                                 if let Some(t) = want {
                                     let _ = conn.convert_selection(
                                         win,
-                                        atoms.clipboard,
+                                        e.selection,
                                         t,
                                         atoms.prop,
                                         x11rb::CURRENT_TIME,
@@ -245,8 +269,10 @@ pub fn spawn(
                             atoms.text_plain,
                             u32::from(AtomEnum::STRING),
                         ];
+                        let is_clip = e.selection == atoms.clipboard
+                            || e.selection == u32::from(AtomEnum::PRIMARY);
                         let ok = match &owned {
-                            Some(ClipContent::Text(text)) if e.selection == atoms.clipboard => {
+                            Some(ClipContent::Text(text)) if is_clip => {
                                 if e.target == atoms.targets {
                                     let list = [
                                         atoms.targets,
@@ -276,7 +302,7 @@ pub fn spawn(
                                     false
                                 }
                             }
-                            Some(ClipContent::Image(png)) if e.selection == atoms.clipboard => {
+                            Some(ClipContent::Image(png)) if is_clip => {
                                 if e.target == atoms.targets {
                                     conn.change_property32(
                                         PropMode::REPLACE,
@@ -313,7 +339,11 @@ pub fn spawn(
                         let _ = conn.send_event(false, e.requestor, EventMask::NO_EVENT, notify);
                         let _ = conn.flush();
                     }
-                    Event::SelectionClear(_) => owned = None,
+                    Event::SelectionClear(e) => {
+                        if e.selection == atoms.clipboard {
+                            owned = None;
+                        }
+                    }
                     _ => {}
                 }
             }

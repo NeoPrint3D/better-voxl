@@ -397,6 +397,9 @@ fn handle_text(s: &AppState, c: &Arc<Client>, t: &str, rtts: &mut std::collectio
             }
         }
         "r" => input(InputEvent::ReleaseAll),
+        "p" => input(InputEvent::Paste),
+        "yc" => input(InputEvent::Copy),
+        "yx" => input(InputEvent::Cut),
         "c" => input(InputEvent::Clipboard(crate::desktop::ClipContent::Text(
             rest.to_string(),
         ))),
@@ -410,7 +413,10 @@ fn handle_text(s: &AppState, c: &Arc<Client>, t: &str, rtts: &mut std::collectio
             }
             s.hub.wake();
         }
-        "au" => c.audio.store(rest == "1" && s.audio, Ordering::Relaxed),
+        "au" => {
+            c.audio_pcm.store(rest == "1,pcm", Ordering::Relaxed);
+            c.audio.store(matches!(rest, "1" | "1,pcm") && s.audio, Ordering::Release);
+        }
         "mi" => {
             if let Some(tx) = &s.mic {
                 let _ = tx.send(if rest == "1" {
@@ -514,6 +520,14 @@ mod tests {
         let (tx, _rx) = mpsc::unbounded_channel();
         let client = hub.add_client(tx);
         let mut rtts = Default::default();
+        handle_text(&s, &client, "au,1,pcm", &mut rtts);
+        assert!(client.audio.load(Ordering::Relaxed));
+        assert!(client.audio_pcm.load(Ordering::Relaxed));
+        handle_text(&s, &client, "au,1", &mut rtts);
+        assert!(client.audio.load(Ordering::Relaxed));
+        assert!(!client.audio_pcm.load(Ordering::Relaxed));
+        handle_text(&s, &client, "au,0", &mut rtts);
+        assert!(!client.audio.load(Ordering::Relaxed));
         for c in ALL {
             handle_text(&s, &client, c, &mut rtts);
         }
@@ -543,6 +557,8 @@ mod tests {
             index: Bytes::new(), favicon: Bytes::new(), favicon_type: "image/x-icon",
         };
         let mut rtts = Default::default();
+        handle_text(&state, &client, "au,1,pcm", &mut rtts);
+        assert!(!client.audio.load(Ordering::Relaxed), "server audio-disabled policy must win");
         handle_text(&state, &client, "sessions", &mut rtts);
         let Out::Text(reply) = rx.recv().await.unwrap() else { panic!("expected session list") };
         let data: serde_json::Value = serde_json::from_str(&reply).unwrap();

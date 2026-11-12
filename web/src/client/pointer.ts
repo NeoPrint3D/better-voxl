@@ -26,7 +26,6 @@ export function setupPointer(app: App, onInteract: () => void) {
 	try {
 		const saved = localStorage.getItem('voxl-input-mode');
 		if (saved === 'pad' || saved === 'direct') inputMode = saved;
-		else if (saved === 'stick') inputMode = 'pad';
 		else if (localStorage.getItem('voxl-touch-mode') === 'direct') inputMode = 'direct';
 	} catch {}
 	let trackpad = inputMode !== 'direct';
@@ -53,7 +52,9 @@ export function setupPointer(app: App, onInteract: () => void) {
 	}
 	function moveBy(dx: number, dy: number) {
 		const [x, y] = position || [app.desk.w / 2, app.desk.h / 2];
-		const gain = precision ? Math.max(0.5, Math.min(1.4, deskPerPx() * 0.35)) : Math.max(1, deskPerPx() * 0.8);
+		// Scale gestures against the full remote desktop and user-selected cursor speed.
+		// New 1× baseline is half the previous relative-pointer speed.
+		const gain = deskPerPx() * (precision ? 0.4 : 2) * cursorSpeed;
 		emit(x + dx * gain, y + dy * gain);
 	}
 
@@ -146,7 +147,6 @@ export function setupPointer(app: App, onInteract: () => void) {
 		modeBtn.setAttribute('data-input-mode', inputMode);
 		modeBtn.setAttribute('aria-label', `Input mode: ${label}. Tap to change mode.`);
 		modeBtn.title = 'Input mode: Pad / Direct';
-		stickPanel.classList.add('stick-collapsed');
 		marker.classList.toggle('visible', trackpad && matchMedia('(pointer: coarse)').matches);
 	}
 	modeBtn.addEventListener('click', () => {
@@ -171,12 +171,35 @@ export function setupPointer(app: App, onInteract: () => void) {
 		emit(...(position || [app.desk.w / 2, app.desk.h / 2]), true);
 		setDragging(!dragging);
 	});
-	const stickPanel = document.getElementById('joystick-panel')!;
-	const stickActions = document.getElementById('stick-actions')!;
-	for (const id of ['left-btn', 'right-btn', 'drag-btn', 'precision-btn']) stickActions.appendChild(document.getElementById(id)!);
-	let precision = true;
-	try { precision = localStorage.getItem('voxl-precision') !== 'fast'; } catch {}
+	let precision = false;
+	try { precision = localStorage.getItem('voxl-precision') === 'fine'; } catch {}
+	let cursorSpeed = 1;
+	try {
+		const savedSpeed = parseFloat(localStorage.getItem('voxl-cursor-speed-v2') || '');
+		if (Number.isFinite(savedSpeed) && savedSpeed >= 0.2 && savedSpeed <= 4) cursorSpeed = savedSpeed;
+	} catch {}
 	const precisionBtn = document.getElementById('precision-btn')!;
+	const speedSlider = document.getElementById('speed-slider') as HTMLInputElement | null;
+	const speedBtn = document.getElementById('speed-btn');
+	function updateSpeedUI() {
+		if (speedSlider) speedSlider.value = String(cursorSpeed);
+		if (speedBtn) speedBtn.textContent = `${Number(cursorSpeed.toFixed(2))}×`;
+	}
+	function setCursorSpeed(next: number) {
+		cursorSpeed = Math.max(0.25, Math.min(3.5, Math.round(next * 4) / 4));
+		try { localStorage.setItem('voxl-cursor-speed-v2', String(cursorSpeed)); } catch {}
+		updateSpeedUI();
+	}
+	speedSlider?.addEventListener('input', () => {
+		const v = parseFloat(speedSlider.value);
+		if (Number.isFinite(v)) setCursorSpeed(v);
+	});
+	speedBtn?.addEventListener('click', () => {
+		const presets = [0.5, 0.75, 1, 1.5, 2, 3];
+		const idx = presets.findIndex(p => Math.abs(p - cursorSpeed) < 0.05);
+		setCursorSpeed(presets[(idx + 1) % presets.length]);
+	});
+	updateSpeedUI();
 	function updatePrecision() {
 		precisionBtn.classList.toggle('on', precision);
 		precisionBtn.setAttribute('aria-pressed', String(precision));

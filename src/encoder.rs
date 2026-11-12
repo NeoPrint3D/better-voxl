@@ -32,6 +32,7 @@ pub struct Encoder {
     pts: i64,
     pub width: u32,
     pub height: u32,
+    debug_marker: bool,
 }
 
 unsafe impl Send for Encoder {}
@@ -84,10 +85,10 @@ impl Encoder {
             param.rc.i_rc_method = ffi::X264_RC_CRF as i32;
             param.rc.f_rf_constant = cfg.crf;
             param.rc.i_lookahead = 0;
-            // UMH favors compression for large motion; HEX reduces CPU cost on
-            // constrained hosts. Keep the original default and allow measured tuning.
-            // CRF, static refinement quality and resolution are independent of search.
-            let search = std::env::var("VOXL_MOTION_SEARCH").unwrap_or_else(|_| "umh".into());
+            // HEX favors low encoding latency; UMH remains available for workloads
+            // that benefit from its more exhaustive search. This does not change CRF,
+            // static refinement settings or resolution (compression can still differ).
+            let search = std::env::var("VOXL_MOTION_SEARCH").unwrap_or_else(|_| "hex".into());
             param.analyse.i_me_method = match search.as_str() {
                 "umh" => ffi::X264_ME_UMH,
                 "hex" => ffi::X264_ME_HEX,
@@ -132,6 +133,7 @@ impl Encoder {
                 pts: 0,
                 width: cfg.width,
                 height: cfg.height,
+                debug_marker: std::env::var("VOXL_DEBUG_MARKER").is_ok(),
             })
         }
     }
@@ -201,7 +203,7 @@ impl Encoder {
                 let first = &*nals;
                 out.extend_from_slice(std::slice::from_raw_parts(first.p_payload, size as usize));
             }
-            if std::env::var("VOXL_DEBUG_MARKER").is_ok() {
+            if self.debug_marker {
                 log::info!(
                     "x264 out {} bytes, delayed {}, pts in {} out {}",
                     size,

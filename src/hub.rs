@@ -8,6 +8,10 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc;
 
+#[cfg(test)]
+#[path = "hub_audio_tests.rs"]
+mod audio_tests;
+
 pub enum Out {
     Bin(Bytes),
     Text(String),
@@ -27,6 +31,7 @@ pub struct Client {
     pub tx: mpsc::UnboundedSender<Out>,
     pub video: AtomicBool,
     pub audio: AtomicBool,
+    pub audio_pcm: AtomicBool,
     pub inflight: Mutex<VecDeque<Inflight>>,
     /// Smoothed min RTT (ms), from pings.
     pub min_rtt_ms: AtomicU32,
@@ -307,6 +312,7 @@ impl Hub {
             tx,
             video: AtomicBool::new(false),
             audio: AtomicBool::new(false),
+            audio_pcm: AtomicBool::new(false),
             inflight: Mutex::new(VecDeque::new()),
             min_rtt_ms: AtomicU32::new(0),
             delivered: Mutex::new(RateEst {
@@ -325,6 +331,36 @@ impl Hub {
         });
         self.clients.lock().push(c.clone());
         c
+    }
+
+    /// PCM fallback for browsers without WebCodecs Opus. Build each format only
+    /// once per capture, and only when a subscriber needs it.
+    pub fn send_audio(&self, opus: &[u8], pcm: &[i16]) {
+        let mut compressed: Option<Bytes> = None;
+        let mut raw: Option<Bytes> = None;
+        for c in self.clients.lock().iter() {
+            if !c.audio.load(Ordering::Acquire) {
+                continue;
+            }
+            let bytes = if c.audio_pcm.load(Ordering::Relaxed) {
+                raw.get_or_insert_with(|| {
+                    let mut m = Vec::with_capacity(1 + pcm.len() * 2);
+                    m.push(0x05); // s16le, 48 kHz, interleaved stereo
+                    for s in pcm {
+                        m.extend_from_slice(&s.to_le_bytes());
+                    }
+                    Bytes::from(m)
+                })
+            } else {
+                compressed.get_or_insert_with(|| {
+                    let mut m = Vec::with_capacity(1 + opus.len());
+                    m.push(0x02);
+                    m.extend_from_slice(opus);
+                    Bytes::from(m)
+                })
+            };
+            c.send(Out::Bin(bytes.clone()));
+        }
     }
 
     pub fn remove_client(&self, id: u64) {

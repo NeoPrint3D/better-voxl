@@ -101,6 +101,7 @@ pub struct Capturer {
     pub mb_cols: usize,
     /// Areas (x0, y0, x1, y1) changed since the video thread last took them, for `/wait`.
     pub changes: Vec<(u32, u32, u32, u32)>,
+    debug_damage: bool,
 }
 
 impl Capturer {
@@ -178,6 +179,7 @@ impl Capturer {
             mb_dirty: vec![0; (width as usize).div_ceil(16) * (height as usize).div_ceil(16)],
             mb_cols: (width as usize).div_ceil(16),
             changes: Vec::new(),
+            debug_damage: std::env::var("VOXL_DEBUG_DAMAGE").is_ok(),
         })
     }
 
@@ -190,7 +192,7 @@ impl Capturer {
         while let Some(ev) = self.conn.poll_for_event().map_err(|e| e.to_string())? {
             if let Event::DamageNotify(e) = ev {
                 DAMAGE_EVENTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                if std::env::var("VOXL_DEBUG_DAMAGE").is_ok() {
+                if self.debug_damage {
                     log::info!(
                         "dmg {:?} x{} y{} {}x{}",
                         std::time::SystemTime::now()

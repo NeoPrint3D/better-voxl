@@ -104,8 +104,6 @@ export function setupKeyboard(
 	const down = new Map<string, number>(); // code -> keysym
 	let syntheticAlt = false;
 	let pendingPaste: {
-		code: string;
-		ks: number;
 		timer: ReturnType<typeof setTimeout>;
 	} | null = null;
 	const press = (code: string, ks: number) => {
@@ -129,28 +127,87 @@ export function setupKeyboard(
 		app.modifiers?.clear();
 		surface.dispatchEvent(new Event('voxl-modifiers-reset'));
 	}
-	function flushPaste() {
+	function flushPaste(tryReadClipboard = false) {
 		if (!pendingPaste) return;
 		const p = pendingPaste;
 		pendingPaste = null;
 		clearTimeout(p.timer);
-		press(p.code, p.ks);
-	}
-
-	function onKeyDown(e: KeyboardEvent) {
-		if (e.isComposing) return;
-		onInteract();
-		const ks = keysymOf(e);
-		if (!ks) return;
-		const accel = isMac ? e.metaKey : e.ctrlKey;
-		if (accel && !e.altKey && (e.key === 'v' || e.key === 'V') && !e.repeat) {
-			// Let the browser deliver a paste event to the hidden textarea first, so the
-			// remote clipboard holds the local contents before the shortcut lands.
-			pendingPaste = { code: e.code, ks, timer: setTimeout(flushPaste, 150) };
+		if (tryReadClipboard && navigator.clipboard?.readText) {
+			navigator.clipboard
+				.readText()
+				.then((text) => {
+					if (text) {
+						clipboard.noteLocal(text);
+						send(cmd.clipboard(text));
+					}
+				})
+				.catch(() => {})
+				.finally(() => send(cmd.paste));
 			return;
 		}
+		send(cmd.paste);
+	}
+
+	function localFormTarget(target: EventTarget | null) {
+		return (
+			target instanceof HTMLElement &&
+			target !== kbd &&
+			!!target.closest('input, textarea, select, [contenteditable="true"], #files')
+		);
+	}
+	function localForm(e: KeyboardEvent) {
+		return localFormTarget(e.target);
+	}
+
+	function isPasteShortcut(e: KeyboardEvent): boolean {
+		if (e.altKey) return false;
+		if ((e.ctrlKey || e.metaKey) && (e.code === 'KeyV' || e.key === 'v' || e.key === 'V')) {
+			return true;
+		}
+		if (e.shiftKey && !e.ctrlKey && !e.metaKey && (e.code === 'Insert' || e.key === 'Insert')) {
+			return true;
+		}
+		return false;
+	}
+
+	function isSmartCopyShortcut(e: KeyboardEvent): boolean {
+		if (e.altKey) return false;
+		// Mac: Cmd+C copies everywhere (including terminals, while Ctrl+C remains SIGINT).
+		if (isMac && e.metaKey && !e.ctrlKey && (e.code === 'KeyC' || e.key === 'c' || e.key === 'C')) {
+			return true;
+		}
+		// Windows/Linux/Mac: Ctrl+Shift+C or Ctrl+Insert copies in both terminals and GUI apps.
+		if (e.ctrlKey && e.shiftKey && (e.code === 'KeyC' || e.key === 'c' || e.key === 'C')) {
+			return true;
+		}
+		if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.code === 'Insert' || e.key === 'Insert')) {
+			return true;
+		}
+		return false;
+	}
+
+	const handled = new WeakSet<Event>();
+	function onKeyDown(e: KeyboardEvent) {
+		if (handled.has(e) || e.isComposing || localForm(e)) return;
+		handled.add(e);
+		onInteract();
+		if (isPasteShortcut(e)) {
+			if (!e.repeat) {
+				try { kbd.focus?.({ preventScroll: true }); } catch {}
+				if (e.code === 'Insert' || e.shiftKey) e.preventDefault();
+				pendingPaste = { timer: setTimeout(() => flushPaste(true), 100) };
+			}
+			return;
+		}
+		if (isSmartCopyShortcut(e)) {
+			e.preventDefault();
+			if (!e.repeat) send(cmd.copy);
+			return;
+		}
+		const ks = keysymOf(e);
+		if (!ks) return;
 		e.preventDefault();
-		// Focus may enter the iframe while Option is already held, so its keydown
+		// Focus may enter the iframe while Option/Alt is already held, so its keydown
 		// never reached us. Recover Alt from the chord's modifier flags.
 		if (e.altKey && !e.getModifierState('AltGraph') &&
 			!e.code.startsWith('Alt') && !down.has('AltLeft') && !down.has('AltRight') && !app.modifiers?.has(0xffe9)) {
@@ -165,8 +222,10 @@ export function setupKeyboard(
 		press(e.code, ks);
 	}
 	function onKeyUp(e: KeyboardEvent) {
+		if (handled.has(e)) return;
+		if (localForm(e) && !down.has(e.code) && !(syntheticAlt && e.code.startsWith('Alt'))) return;
+		handled.add(e);
 		e.preventDefault();
-		if (pendingPaste && pendingPaste.code === e.code) flushPaste();
 		const released = down.get(e.code);
 		release(e.code);
 		if (released !== undefined && app.modifiers?.has(released)) send(cmd.key(released, true));
@@ -177,41 +236,26 @@ export function setupKeyboard(
 		}
 		// macOS swallows keyups of keys released while Cmd is held.
 		if (isMac && (e.code === 'MetaLeft' || e.code === 'MetaRight')) {
-			for (const code of down.keys())
+			for (const code of [...down.keys()])
 				if (!/^(Shift|Control|Alt|Meta)/.test(code)) release(code);
 		}
 	}
-	for (const target of [kbd, surface]) {
-		target.addEventListener('keydown', onKeyDown);
-		target.addEventListener('keyup', onKeyUp);
+	for (const target of [kbd, surface, document]) {
+		target.addEventListener('keydown', onKeyDown as EventListener, true);
+		target.addEventListener('keyup', onKeyUp as EventListener, true);
 	}
-	// Workspace chords also work when a toolbar button or the page background has
-	// focus. Do not capture typing in local file dialogs/forms. No parent-page or
-	// OS-reserved shortcuts can be intercepted from inside a cross-origin iframe.
-	function localForm(e: KeyboardEvent) {
-		const target = e.target;
-		return target instanceof HTMLElement && target !== kbd &&
-			!!target.closest('input, textarea, select, [contenteditable="true"], #files');
-	}
-	document.addEventListener('keydown', e => {
-		if (!e.altKey || !/^Digit[0-9]$/.test(e.code) || localForm(e)) return;
-		onKeyDown(e);
-		e.stopPropagation();
-	}, true);
-	document.addEventListener('keyup', e => {
-		if (e.target === kbd || e.target === surface) return;
-		// Release keys captured before focus changed, even inside a local form.
-		if (down.has(e.code) || (syntheticAlt && e.code.startsWith('Alt'))) onKeyUp(e);
-	}, true);
 
-	kbd.addEventListener('paste', (e) => {
+	function onPaste(e: ClipboardEvent) {
+		if (handled.has(e) || localFormTarget(e.target)) return;
+		handled.add(e);
 		e.preventDefault();
 		const dt = e.clipboardData;
 		const text = dt?.getData('text/plain');
 		if (text) {
 			clipboard.noteLocal(text);
 			send(cmd.clipboard(text));
-			flushPaste();
+			if (pendingPaste) flushPaste(false);
+			else send(cmd.paste);
 			return;
 		}
 		const file = dt
@@ -220,19 +264,26 @@ export function setupKeyboard(
 					?.getAsFile()
 			: null;
 		if (!file) {
-			flushPaste();
+			if (pendingPaste) flushPaste(true);
+			else send(cmd.paste);
 			return;
 		}
 		// Hold the paste shortcut until the image is on the remote clipboard.
 		if (pendingPaste) {
 			clearTimeout(pendingPaste.timer);
-			pendingPaste.timer = setTimeout(flushPaste, 3000);
+			pendingPaste.timer = setTimeout(() => flushPaste(false), 3000);
 		}
 		toPng(file)
 			.then((png) => app.sendBin(Bin.ClipImageUp, new Uint8Array(png)))
 			.catch((err) => console.warn('[voxl] image paste failed', err))
-			.finally(flushPaste);
-	});
+			.finally(() => {
+				if (pendingPaste) flushPaste(false);
+				else send(cmd.paste);
+			});
+	}
+	for (const target of [kbd, surface, document]) {
+		target.addEventListener('paste', onPaste as EventListener, true);
+	}
 
 	// Text that arrives without usable keydowns (IME, dead-key composition, mobile
 	// keyboards, insertText) is typed as individual keysyms.

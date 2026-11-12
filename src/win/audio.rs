@@ -2,8 +2,7 @@
 //! play, no driver needed) -> Opus (10 ms frames) -> clients, while any client wants
 //! audio.
 
-use crate::hub::{Hub, Out};
-use bytes::Bytes;
+use crate::hub::Hub;
 use std::ffi::{c_int, c_void};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -74,15 +73,7 @@ impl Encoder {
             if n <= 0 {
                 continue;
             }
-            let mut m = Vec::with_capacity(n as usize + 1);
-            m.push(0x02);
-            m.extend_from_slice(&self.out[..n as usize]);
-            let b = Bytes::from(m);
-            for c in hub.clients.lock().iter() {
-                if c.audio.load(Ordering::Relaxed) {
-                    c.send(Out::Bin(b.clone()));
-                }
-            }
+            hub.send_audio(&self.out[..n as usize], &pcm);
         }
     }
 }

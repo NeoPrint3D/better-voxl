@@ -95,6 +95,11 @@ function main() {
 	const video = createVideo(app, canvas, useVideo, cursor.apply);
 	const clipboard = createClipboard(app);
 	const audio = createAudio(app);
+	// Touch pointerdown is not an activation event on every Safari version.
+	// Capture touchend/click too, including toolbar taps and read-only viewers.
+	for (const event of ['touchend', 'click', 'keydown']) {
+		document.addEventListener(event, () => { void audio.start(); }, { capture: true, passive: true });
+	}
 	// Browsers only allow audio and clipboard writes after a user gesture.
 	const onInteract = () => {
 		audio.start();

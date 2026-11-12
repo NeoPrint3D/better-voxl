@@ -9,6 +9,8 @@ export const Bin = {
 	Video: 0x01,
 	/** Server: Opus desktop audio. */
 	Audio: 0x02,
+	/** Server: s16le stereo PCM at 48 kHz (compatibility fallback). */
+	AudioPcm: 0x05,
 	/** Server: cursor image (RGBA). */
 	Cursor: 0x03,
 	/** Server: clipboard image (PNG). */
@@ -67,9 +69,12 @@ export const cmd = {
 	scroll: (dx: number, dy: number) => `sp,${dx.toFixed(1)},${dy.toFixed(1)}`,
 	key: (keysym: number, down: boolean) => `k,${keysym},${down ? 1 : 0}`,
 	releaseAll: 'r',
+	paste: 'p',
+	copy: 'yc',
+	cut: 'yx',
 	clipboard: (text: string) => `c,${text}`,
 	video: (on: boolean) => `v,${on ? 1 : 0}`,
-	audio: (on: boolean) => `au,${on ? 1 : 0}`,
+	audio: (on: boolean, pcm = false) => `au,${on ? (pcm ? '1,pcm' : '1') : '0'}`,
 	mic: (on: boolean) => `mi,${on ? 1 : 0}`,
 	/** Ask for a desktop of this size (dynamic resolution). */
 	resize: (w: number, h: number) => `sz,${w},${h}`,

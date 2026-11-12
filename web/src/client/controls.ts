@@ -6,8 +6,11 @@ export function setupControlTabs(app: App, layout: () => void) {
 	const groups: Record<string, HTMLElement> = {
 		mouse: get('controls-mouse'), i3: get('i3-panel'), keys: get('controls-keys'), more: get('controls-more'), sessions: get('controls-sessions'),
 	};
-	for (const id of ['joystick-panel', 'touch-mode-btn', 'zoom-btn']) groups.mouse.appendChild(get(id));
-	for (const id of ['help-btn', 'install-btn', 'mic-btn', 'files-btn', 'fs-btn']) groups.more.appendChild(get(id));
+	for (const id of ['left-btn', 'right-btn', 'drag-btn', 'precision-btn', 'touch-mode-btn', 'zoom-btn', 'speed-control']) {
+		const item = document.getElementById(id);
+		if (item) groups.mouse.appendChild(item);
+	}
+	for (const id of ['help-btn', 'install-btn', 'mic-btn', 'files-btn', 'fs-btn', 'fit-btn']) groups.more.appendChild(get(id));
 	get('keyboard-slot').appendChild(get('kb-btn'));
 	get('i3-btn').hidden = true;
 	app.tools.classList.add('controls-ready');

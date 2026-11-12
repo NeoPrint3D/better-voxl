@@ -5,8 +5,9 @@ import type { App } from './app';
 
 const ALT = 0xffe9, SHIFT = 0xffe1;
 export const I3_ACTIONS: Record<string, number[]> = {
-	terminal: [ALT, 0xff0d], browser: [ALT, 0x62], files: [ALT, SHIFT, 0x65],
-	dropdown: [ALT, 0x60], launcher: [ALT, 0x64], picker: [ALT, 0xff09],
+	terminal: [ALT, SHIFT, 0x74], browser: [ALT, SHIFT, 0x62], files: [ALT, SHIFT, 0x65],
+	dropdown: [ALT, 0x60], launcher: [ALT, SHIFT, 0x64], settings: [ALT, SHIFT, 0x73],
+	desktop: [ALT, SHIFT, 0x6d], picker: [ALT, 0xff09],
 	left: [ALT, 0xff51], up: [ALT, 0xff52], down: [ALT, 0xff54], right: [ALT, 0xff53],
 	tabbed: [ALT, 0x77], split: [ALT, 0x65], fullscreen: [ALT, 0x66],
 	close: [ALT, SHIFT, 0x71],

@@ -40,6 +40,7 @@ try {
     check(`Digit${n}`, key, { altKey: true }, 48 + n);
     check(`Digit${n}`, key, { altKey: true, shiftKey: true }, 48 + n);
   }
+  check('Escape', 'Escape', {}, 0xff1b);
   check('KeyQ', 'Œ', { altKey: true, shiftKey: true }, 0x71);
   check('Digit2', '@', { shiftKey: true }, 0x40);
   check('Digit2', '™', {}, 0x01002122);

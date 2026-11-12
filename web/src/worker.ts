@@ -25,6 +25,7 @@ let audioPort: MessagePort | null = null;
 let audioTs = 0;
 let wantVideo = true;
 let wantAudio = false;
+let audioPcm = false;
 
 // The screen arrives as independent H.264 stripes, one decoder each. A frame is a
 // set of stripe updates sharing an id; frames are presented whole and in order.
@@ -70,7 +71,7 @@ function connect() {
 	sock.addEventListener('open', () => {
 		post({ t: 'status', s: 'open' });
 		send(cmd.video(wantVideo));
-		send(cmd.audio(wantAudio));
+		send(cmd.audio(wantAudio, audioPcm));
 	});
 	sock.addEventListener('close', (event) => {
 		const kicked = event.code === 4001;
@@ -87,6 +88,9 @@ function connect() {
 				break;
 			case Bin.Audio:
 				onAudio(b);
+				break;
+			case Bin.AudioPcm:
+				onAudioPcm(b);
 				break;
 			case Bin.Cursor:
 				post({ t: 'cursor', buf: e.data }, [e.data]);
@@ -290,36 +294,68 @@ function onVideo(b: Uint8Array) {
 	}
 }
 
+function usePcmAudio() {
+	if (audioDecoder && audioDecoder.state !== 'closed') audioDecoder.close();
+	audioDecoder = null;
+	audioPcm = true;
+	if (wantAudio) send(cmd.audio(true, true));
+}
+
+async function startAudio(port: MessagePort) {
+	audioPort?.close();
+	audioPort = port;
+	const config = { codec: 'opus', sampleRate: 48000, numberOfChannels: 2 };
+	try {
+		audioPcm = typeof AudioDecoder === 'undefined' ||
+			!(await AudioDecoder.isConfigSupported(config)).supported;
+	} catch {
+		audioPcm = true;
+	}
+	wantAudio = true;
+	send(cmd.audio(true, audioPcm));
+}
+
+function onAudioPcm(b: Uint8Array) {
+	if (!audioPort || !audioPcm || (b.length - 1) % 4 !== 0) return;
+	const n = (b.length - 1) / 4;
+	const l = new Float32Array(n);
+	const r = new Float32Array(n);
+	const data = new DataView(b.buffer, b.byteOffset + 1, b.byteLength - 1);
+	for (let i = 0; i < n; i++) {
+		l[i] = data.getInt16(i * 4, true) / 32768;
+		r[i] = data.getInt16(i * 4 + 2, true) / 32768;
+	}
+	audioPort.postMessage({ l, r }, [l.buffer, r.buffer]);
+}
+
 function onAudio(b: Uint8Array) {
 	const port = audioPort;
-	if (!port || typeof AudioDecoder === 'undefined') return;
-	if (!audioDecoder) {
-		audioDecoder = new AudioDecoder({
-			output: (ad) => {
-				const n = ad.numberOfFrames;
-				const chunk: PcmChunk = {
-					l: new Float32Array(n),
-					r: new Float32Array(n),
-				};
-				ad.copyTo(chunk.l, { planeIndex: 0, format: 'f32-planar' });
-				if (ad.numberOfChannels > 1)
-					ad.copyTo(chunk.r, { planeIndex: 1, format: 'f32-planar' });
-				else chunk.r.set(chunk.l);
-				ad.close();
-				port.postMessage(chunk, [chunk.l.buffer, chunk.r.buffer]);
-			},
-			error: () => {
-				audioDecoder = null;
-			},
-		});
-		audioDecoder.configure({
-			codec: 'opus',
-			sampleRate: 48000,
-			numberOfChannels: 2,
-		});
-	}
-	audioTs += 10000;
+	if (!port || audioPcm || typeof AudioDecoder === 'undefined') return;
 	try {
+		if (!audioDecoder) {
+			audioDecoder = new AudioDecoder({
+				output: (ad) => {
+					const n = ad.numberOfFrames;
+					const chunk: PcmChunk = {
+						l: new Float32Array(n),
+						r: new Float32Array(n),
+					};
+					ad.copyTo(chunk.l, { planeIndex: 0, format: 'f32-planar' });
+					if (ad.numberOfChannels > 1)
+						ad.copyTo(chunk.r, { planeIndex: 1, format: 'f32-planar' });
+					else chunk.r.set(chunk.l);
+					ad.close();
+					port.postMessage(chunk, [chunk.l.buffer, chunk.r.buffer]);
+				},
+				error: usePcmAudio,
+			});
+			audioDecoder.configure({
+				codec: 'opus',
+				sampleRate: 48000,
+				numberOfChannels: 2,
+			});
+		}
+		audioTs += 10000;
 		audioDecoder.decode(
 			new EncodedAudioChunk({
 				type: 'key',
@@ -327,7 +363,9 @@ function onAudio(b: Uint8Array) {
 				data: b.subarray(1),
 			})
 		);
-	} catch {}
+	} catch {
+		usePcmAudio();
+	}
 }
 
 setInterval(() => {
@@ -377,9 +415,7 @@ self.addEventListener('message', (e: MessageEvent<ToWorker>) => {
 			}
 			break;
 		case 'audioPort':
-			audioPort = m.port;
-			wantAudio = true;
-			send(cmd.audio(true));
+			void startAudio(m.port);
 			break;
 	}
 });

@@ -173,8 +173,8 @@ fn build(cfg: &VideoConfig, hub: &Arc<Hub>) -> Result<Pipeline, String> {
     })
 }
 
-fn flow_ok(hub: &Hub, interval_ms: f64) -> bool {
-    for c in hub.video_clients() {
+fn flow_ok(clients: &[Arc<crate::hub::Client>], interval_ms: f64) -> bool {
+    for c in clients {
         let (n, age) = c.backlog();
         if n == 0 {
             continue;
@@ -428,21 +428,20 @@ impl Refiner {
             return None;
         }
         let now = self.now();
-        let mut map = vec![0u8; self.pending.len()];
-        let (mut r0, mut r1, mut any) = (usize::MAX, 0, false);
-        for (i, m) in map.iter_mut().enumerate() {
+        // Most checks have no eligible blocks (especially continuous full-screen
+        // motion). Allocate a map only when there is actually refinement to send.
+        let mut map: Option<Vec<u8>> = None;
+        let (mut r0, mut r1) = (usize::MAX, 0);
+        for i in 0..self.pending.len() {
             if self.pending[i] && now.saturating_sub(self.changed_ms[i]) >= REFINE_STILL_MS {
-                *m = 1;
+                map.get_or_insert_with(|| vec![0u8; self.pending.len()])[i] = 1;
                 self.pending[i] = false;
                 let row = i / self.cols;
                 r0 = r0.min(row);
                 r1 = r1.max(row + 1);
-                any = true;
             }
         }
-        if !any {
-            return None;
-        }
+        let map = map?;
         self.last_refine = Instant::now();
         Some((
             map,
@@ -573,7 +572,7 @@ fn capture_loop(
                 continue;
             }
         }
-        if !want_key && !flow_ok(&hub, interval_ms) {
+        if !want_key && !flow_ok(&clients, interval_ms) {
             hub.stats.flow_blocked.fetch_add(1, Ordering::Relaxed);
             wait_any(&[cap.fd(), hub.waker.waitable()], 4);
             continue;
@@ -1210,6 +1209,10 @@ fn marker_probe(buf: &[u8], stride: usize, what: &str) -> i64 {
 #[cfg(test)]
 #[path = "video/rate_feedback_tests.rs"]
 mod rate_feedback_tests;
+
+#[cfg(test)]
+#[path = "video/refiner_tests.rs"]
+mod refiner_tests;
 
 fn marker_age(ms: i64) -> i64 {
     let now = (std::time::SystemTime::now()

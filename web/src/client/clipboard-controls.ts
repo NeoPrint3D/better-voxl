@@ -20,6 +20,12 @@ export function setupClipboardControls(app: App, clipboard: Clipboard) {
 		sendChord(app.send, keys);
 	}
 	function shortcut(letter: string) {
+		if (app.readOnly) return;
+		if (!app.remoteMac && !terminal) {
+			if (letter === 'v') { app.send(cmd.paste); return; }
+			if (letter === 'c') { app.send(cmd.copy); return; }
+			if (letter === 'x') { app.send(cmd.cut); return; }
+		}
 		const modifier = app.remoteMac ? 0xffeb : 0xffe3;
 		chord(terminal && !app.remoteMac ? [modifier, 0xffe1, letter.charCodeAt(0)] : [modifier, letter.charCodeAt(0)]);
 	}

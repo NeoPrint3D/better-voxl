@@ -1,7 +1,6 @@
 //! Desktop audio: PulseAudio monitor capture -> Opus (10 ms frames) -> clients.
 
-use crate::hub::{Hub, Out};
-use bytes::Bytes;
+use crate::hub::Hub;
 use std::ffi::{c_char, c_int, c_void, CString};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -139,15 +138,7 @@ pub fn spawn(device: String, bitrate: i32, hub: Arc<Hub>) {
                     if n <= 0 {
                         continue;
                     }
-                    let mut m = Vec::with_capacity(n as usize + 1);
-                    m.push(0x02);
-                    m.extend_from_slice(&out[..n as usize]);
-                    let b = Bytes::from(m);
-                    for c in hub.clients.lock().iter() {
-                        if c.audio.load(Ordering::Relaxed) {
-                            c.send(Out::Bin(b.clone()));
-                        }
-                    }
+                    hub.send_audio(&out[..n as usize], &pcm);
                 }
                 pa_simple_free(s);
                 log::info!("audio capture stopped");

@@ -17,7 +17,7 @@ try{
  app.surface.addEventListener('voxl-release-input',()=>app.modifiers.clear());
  Object.defineProperty(globalThis.navigator,'clipboard',{configurable:true,value:{readText:async()=> 'from device',writeText:async text=>written.push(text)}});
  setupClipboardControls(app,{getText:()=> 'from VM',noteLocal:text=>noted.push(text)});
- elements['copy-selection-btn'].click();assert.ok(sent.includes('k,65507,1')&&sent.includes('k,99,1'));
+ elements['copy-selection-btn'].click();assert.ok(sent.includes('yc'));
  sent.length=0;raw.click();assert.ok(sent.includes('k,99,1'));
  elements['terminal-clipboard-btn'].click();sent.length=0;elements['copy-selection-btn'].click();assert.ok(sent.includes('k,65505,1'));
  sent.length=0;elements['cut-selection-btn'].click();assert.deepEqual(sent,[],'terminal cut is not silently mapped to an invalid chord');

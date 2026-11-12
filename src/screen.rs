@@ -15,9 +15,14 @@ use x11rb::rust_connection::RustConnection;
 pub const MIN: (u32, u32) = (640, 480);
 
 /// A size the screen can take: within [MIN, max], width a multiple of 8 and height
-/// even (4:2:0 video), rounding down.
+/// even (4:2:0 video), rounding down. If a screen's maximum is below MIN, use
+/// that smaller maximum as the lower bound too.
 pub fn fit(w: u32, h: u32, max: (u32, u32)) -> (u32, u32) {
-    (w.clamp(MIN.0, max.0) & !7, h.clamp(MIN.1, max.1) & !1)
+    // clamp panics when min > max; small X screens must not crash the server.
+    (
+        w.clamp(MIN.0.min(max.0), max.0) & !7,
+        h.clamp(MIN.1.min(max.1), max.1) & !1,
+    )
 }
 
 pub struct Screen {
@@ -181,5 +186,32 @@ impl Screen {
         self.current = (w, h);
         log::info!("desktop resized to {w}x{h}");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fit_stays_within_min_and_max() {
+        let max = (2560, 1600);
+        assert_eq!(fit(1921, 1081, max), (1920, 1080));
+        assert_eq!(fit(100, 100, max), MIN);
+        assert_eq!(fit(9999, 9999, max), max);
+    }
+
+    #[test]
+    fn fit_handles_a_screen_smaller_than_min() {
+        assert_eq!(fit(1920, 1080, (800, 450)), (800, 450));
+        assert_eq!(fit(100, 100, (800, 450)), (640, 450));
+        assert_eq!(fit(1920, 1080, (600, 400)), (600, 400));
+        assert_eq!(fit(100, 100, (600, 1080)), (600, 480));
+    }
+
+    #[test]
+    fn fit_aligns_small_screen_limits_without_exceeding_them() {
+        assert_eq!(fit(1920, 1080, (601, 401)), (600, 400));
+        assert_eq!(fit(100, 100, (601, 401)), (600, 400));
     }
 }

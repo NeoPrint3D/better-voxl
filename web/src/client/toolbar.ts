@@ -7,13 +7,13 @@ import { setupControlTabs } from './controls';
 import { setupClipboardControls } from './clipboard-controls';
 import type { Clipboard } from './clipboard';
 import { setupModifiers } from './modifiers';
+import { setupFullscreen } from './fullscreen';
 
 export function setupToolbar(app: App, onFullscreenChange: () => void, clipboard: Clipboard) {
 	const { tools, kbd } = app;
 	setupI3(app, onFullscreenChange);
 	setupModifiers(app);
 	const kbBtn = el<HTMLButtonElement>('kb-btn');
-	const fsBtn = el<HTMLButtonElement>('fs-btn');
 	const zoomBtn = el('zoom-btn');
 	zoomBtn.addEventListener('click', () => {
 		const levels = [1, 1.5, 2, 3];
@@ -49,6 +49,9 @@ export function setupToolbar(app: App, onFullscreenChange: () => void, clipboard
 			e.preventDefault(); // Keep the software keyboard focused; click still acts.
 			e.stopPropagation();
 		});
+	for (const inp of tools.querySelectorAll<HTMLElement>('input, textarea, label'))
+		for (const evt of ['pointerdown', 'pointermove', 'pointerup'] as const)
+			inp.addEventListener(evt, (e) => e.stopPropagation());
 
 	kbBtn.addEventListener('click', () => {
 		if (document.activeElement === kbd && kbd.dataset.soft) {
@@ -63,24 +66,7 @@ export function setupToolbar(app: App, onFullscreenChange: () => void, clipboard
 		app.surface.dispatchEvent(new Event('voxl-keyboard-change'));
 	});
 
-	if (!document.fullscreenEnabled) fsBtn.style.display = 'none';
-	fsBtn.addEventListener('click', () => {
-		if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-		else
-			document.documentElement
-				.requestFullscreen({ navigationUI: 'hide' })
-				.catch(() => {});
-	});
-	// In fullscreen, capture browser shortcuts (Cmd/Ctrl+W, T, L, ...) for the desktop.
-	// Keyboard Lock is Chromium-only and only allowed for the top-level page (an
-	// embedding page has to lock on our behalf); hold Esc to leave fullscreen.
-	document.addEventListener('fullscreenchange', () => {
-		const kl = navigator.keyboard;
-		if (document.fullscreenElement) kl?.lock().catch(() => {});
-		else kl?.unlock();
-		fsBtn.classList.toggle('on', !!document.fullscreenElement);
-		onFullscreenChange();
-	});
 	setupClipboardControls(app, clipboard);
 	setupControlTabs(app, onFullscreenChange);
+	setupFullscreen(app, onFullscreenChange);
 }

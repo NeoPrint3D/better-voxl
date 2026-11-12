@@ -1,32 +1,37 @@
-// Desktop audio: the worker decodes Opus and posts PCM straight to the player worklet
-// over a MessageChannel, so audio never waits on the main thread.
+// The worker selects Opus or PCM and feeds the player over a MessageChannel.
 import type { App } from './app';
 
 export function createAudio(app: App) {
 	let started = false;
 	let ac: AudioContext | null = null;
 
-	/** Starts (or resumes) playback; browsers only allow it after a user gesture. */
+	/** Call synchronously from gestures: iOS loses activation across awaits. */
 	async function start() {
-		if (ac && ac.state === 'suspended') {
-			ac.resume().catch(() => {});
-			return;
+		if (ac && ac.state !== 'closed') {
+			// Safari also uses "interrupted" after backgrounding or audio-route changes.
+			if (ac.state !== 'running') void ac.resume().catch(() => {});
+			if (started) return;
 		}
-		if (started || typeof AudioDecoder === 'undefined') return;
+		if (started) return;
 		started = true;
+		let context: AudioContext | null = null;
 		try {
-			ac = new AudioContext({ latencyHint: 'interactive', sampleRate: 48000 });
-			await ac.audioWorklet.addModule('audio.js');
-			const node = new AudioWorkletNode(ac, 'pcm-player', {
+			context = ac = new AudioContext({ latencyHint: 'interactive', sampleRate: 48000 });
+			// Must happen before addModule's await, inside the triggering gesture.
+			void context.resume().catch(() => {});
+			await context.audioWorklet.addModule('audio.js');
+			const node = new AudioWorkletNode(context, 'pcm-player', {
 				outputChannelCount: [2],
 			});
-			node.connect(ac.destination);
+			node.connect(context.destination);
 			const ch = new MessageChannel();
 			node.port.postMessage({ port: ch.port2 }, [ch.port2]);
 			app.post({ t: 'audioPort', port: ch.port1 }, [ch.port1]);
-			if (ac.state !== 'running') ac.resume().catch(() => {});
 		} catch (err) {
-			console.warn('[voxl] audio unavailable', err);
+			started = false; // A transient module/device error must not disable audio forever.
+			ac = null;
+			if (context && context.state !== 'closed') void context.close().catch(() => {});
+			console.warn('[voxl] audio unavailable; tap to retry', err);
 		}
 	}
 	return { start };

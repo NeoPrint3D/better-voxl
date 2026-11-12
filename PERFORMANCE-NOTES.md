@@ -1,5 +1,56 @@
 # Performance investigation — 2026-11-04
 
+## Follow-up: server hot-path optimization
+
+The source now defaults to HEX motion search instead of UMH. Override with
+`VOXL_MOTION_SEARCH=umh` to restore the old search, or `dia` for the existing
+lighter option. Resolution, FPS ceiling, CRF and refinement settings are unchanged;
+search changes can still affect compression efficiency and image quality.
+The older measurements and service configuration below describe a different VM,
+not the current host.
+
+On the current eight-logical-CPU host, two sequential runs of the existing
+1920×1080 synthetic scrolling benchmark (four encoder threads, ultrafast, CRF 24,
+16 Mbps cap; second comparison run in reverse order) gave:
+
+| Search | Scroll mean | Fast-scroll mean | Fast-scroll p95 |
+| --- | --- | --- | --- |
+| UMH | 3.17–4.49 ms | 3.90–3.98 ms | 5.84–5.98 ms |
+| HEX | 2.09–2.13 ms | 1.99–2.47 ms | 2.81–4.23 ms |
+
+These synthetic measurements support the lower-cost default, not a claim about
+live browser FPS or visual equivalence. Bitrates varied between runs; the test
+uses threaded rate control and is not a visual-quality benchmark.
+
+Additional hot-path changes:
+
+- Allocate the regional-refinement map only when at least one block is due,
+  avoiding allocation and zero-fill on unsuccessful checks during motion.
+- Reuse the capture loop's client snapshot for flow control, avoiding a second
+  client-list lock, allocation and Arc clones per check.
+- Cache damage/encoder debug flags at initialization instead of reading the
+  environment for every X damage event or encoded frame.
+
+Validation: 30 unit tests passed in debug and release (two benchmarks ignored in
+normal test runs), including the later audio-fallback tests. Three new tests cover
+refinement eligibility, row bounds, pending-state preservation and rate limiting.
+Existing local edits were preserved. The rebuilt binary has now been deployed to
+`~/.local/bin/voxl` and the user `voxl-stream.service` restarted. Startup logs confirm
+HEX with two encoder threads on this installation (the benchmark above used four).
+An explicit UMH environment override takes precedence.
+
+Build/test on this host (libyuv's pkg-config metadata is in the local cache):
+
+```sh
+export PKG_CONFIG_PATH="$HOME/.cache/voxl-build/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+cargo test --lib
+cargo test --release --lib
+VOXL_MOTION_SEARCH=umh T=4 cargo test --release motion_cost -- --ignored --nocapture
+VOXL_MOTION_SEARCH=hex T=4 cargo test --release motion_cost -- --ignored --nocapture
+cargo build --release
+```
+
+
 ## Measurements
 
 - VM: four CPUs, 8 GiB RAM; display 1920×1080, software x264 ultrafast, 60 fps ceiling,
